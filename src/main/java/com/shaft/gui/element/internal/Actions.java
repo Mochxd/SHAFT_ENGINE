@@ -49,6 +49,7 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.function.Function;
@@ -451,12 +452,15 @@ public class Actions extends ElementActions {
                     case HOVER ->
                             (new org.openqa.selenium.interactions.Actions(d)).pause(defaultPauseDuration).moveToElement(foundElements.get().getFirst()).perform();
                     case CLICK -> {
+                        WebElement targetElement = isMobileNativeExecution
+                                ? chooseBestEffortDisplayedElement(foundElements.get())
+                                : foundElements.get().getFirst();
                         try {
-                            screenshot.set(0, takeActionScreenshot(foundElements.get().getFirst()));
-                            foundElements.get().getFirst().click();
+                            screenshot.set(0, takeActionScreenshot(targetElement));
+                            targetElement.click();
                         } catch (InvalidElementStateException exception) {
                             if (SHAFT.Properties.flags.clickUsingJavascriptWhenWebDriverClickFails()) {
-                                ((JavascriptExecutor) d).executeScript("arguments[0].click();", foundElements.get().getFirst());
+                                ((JavascriptExecutor) d).executeScript("arguments[0].click();", targetElement);
                                 ReportManager.logDiscrete("Performed Click using JavaScript; If the report is showing that the click passed but you observe that no action was taken, we recommend trying a different element locator.");
                             } else {
                                 throw exception;
@@ -519,14 +523,48 @@ public class Actions extends ElementActions {
                         if (!"".equals(foundElements.get().getFirst().getDomProperty("value")))
                             executeClearBasedOnClearMode(foundElements.get().getFirst(), "backspace");
                     }
-                    case DRAG_AND_DROP -> new org.openqa.selenium.interactions.Actions(d).pause(defaultPauseDuration)
-                                    .dragAndDrop(foundElements.get().getFirst(),
-                                            ElementActionsHelper.safeFindElement(d, (By) data)).perform();
-                    case DRAG_AND_DROP_BY_OFFSET ->
-                            new org.openqa.selenium.interactions.Actions(d).pause(defaultPauseDuration)
+                    case DRAG_AND_DROP -> {
+                        String currentDragAndDropSubstep = "resolve source element";
+                        var sourceElement = chooseDragAndDropElement(foundElements.get(), locator, "source");
+                        try {
+                            logDragAndDropTrace("substep=resolveSourceElement, locator=" + JavaHelper.formatLocatorToString(locator)
+                                    + ", matchedElements=" + foundElements.get().size());
+
+                            currentDragAndDropSubstep = "capture pre-action screenshot";
+                            screenshot.set(0, takeActionScreenshot(sourceElement));
+                            logDragAndDropTrace("substep=capturePreActionScreenshot, screenshotCaptured=" + (screenshot.get(0) != null));
+
+                            By destinationLocator = (By) data;
+                            currentDragAndDropSubstep = "resolve destination element";
+                            List<WebElement> destinationElements = ElementActionsHelper.safeFindElements(d, destinationLocator);
+                            logDragAndDropTrace("substep=resolveDestinationElements, locator=" + JavaHelper.formatLocatorToString(destinationLocator)
+                                    + ", matchedElements=" + destinationElements.size());
+                            WebElement destinationElement = chooseDragAndDropElement(destinationElements, destinationLocator, "destination");
+
+                            if (isMobileNativeExecution && d instanceof AppiumDriver appiumDriver) {
+                                currentDragAndDropSubstep = "execute mobile drag and drop";
+                                logDragAndDropTrace("substep=executeMobileDragAndDrop, sourceRect=" + sourceElement.getRect()
+                                        + ", destinationRect=" + destinationElement.getRect());
+                                executeMobileDragAndDrop(appiumDriver, sourceElement, destinationElement);
+                            } else {
+                                currentDragAndDropSubstep = "execute selenium drag and drop";
+                                logDragAndDropTrace("substep=executeSeleniumDragAndDrop");
+                                new org.openqa.selenium.interactions.Actions(d).pause(defaultPauseDuration)
+                                            .dragAndDrop(sourceElement, destinationElement).perform();
+                            }
+                        } catch (RuntimeException traceException) {
+                            logDragAndDropTrace("substepFailure=" + currentDragAndDropSubstep + ", exception="
+                                    + traceException.getClass().getSimpleName() + ", message=" + traceException.getMessage());
+                            throw traceException;
+                        }
+                    }
+                    case DRAG_AND_DROP_BY_OFFSET -> {
+                        screenshot.set(0, takeActionScreenshot(foundElements.get().getFirst()));
+                        new org.openqa.selenium.interactions.Actions(d).pause(defaultPauseDuration)
                                     .dragAndDropBy(foundElements.get().getFirst(),
                                             (int) ((ArrayList<?>) data).get(0),
                                             (int) ((ArrayList<?>) data).get(1)).perform();
+                    }
                     case DROP_FILE_TO_UPLOAD -> {
                         // Prepare target file to be uploaded
                         File file = new File((String) data);
@@ -590,26 +628,26 @@ public class Actions extends ElementActions {
                 return true;
             });
         } catch (WebDriverException exception) {
-            // take failure screenshot if needed
-            if (screenshot.get(0) == null) {
-                try {
+            try {
+                // take failure screenshot if needed
+                if (screenshot.get(0) == null) {
                     if (foundElements.get() == null || foundElements.get().size() != 1) {
                         screenshot.set(0, takeFailureScreenshot(null));
                     } else {
                         screenshot.set(0, takeFailureScreenshot(foundElements.get().getFirst()));
                     }
+                }
+                // report broken
+                reportBroken(action.name(), accessibleName.get(), screenshot.get(0), exception);
+            } catch (RuntimeException exception2) {
+                if (exception2.getCause() == null || !exception2.getCause().equals(exception)) {
+                    // in case a new exception was thrown while attempting to take a screenshot
+                    exception2.addSuppressed(exception);
                     // report broken
-                    reportBroken(action.name(), accessibleName.get(), screenshot.get(0), exception);
-                } catch (RuntimeException exception2) {
-                    if (exception2.getCause() == null || !exception2.getCause().equals(exception)) {
-                        // in case a new exception was thrown while attempting to take a screenshot
-                        exception2.addSuppressed(exception);
-                        // report broken
-                        reportBroken(action.name(), accessibleName.get(), screenshot.get(0), exception2);
-                    } else {
-                        // in case no new exceptions where thrown, just the one created by SHAFT for the main issue
-                        throw exception2;
-                    }
+                    reportBroken(action.name(), accessibleName.get(), screenshot.get(0), exception2);
+                } else {
+                    // in case no new exceptions where thrown, just the one created by SHAFT for the main issue
+                    throw exception2;
                 }
             }
         }
@@ -888,14 +926,150 @@ public class Actions extends ElementActions {
             if (exception != null) {
                 // update allure stacktrace
                 Allure.getLifecycle().updateStep(update -> {
-                    var trace = update.getStatusDetails() == null ? exception : update.getStatusDetails().getTrace() + System.lineSeparator() + exception;
                     StatusDetails details = update.getStatusDetails() == null ? new StatusDetails() : update.getStatusDetails();
-                    details.setTrace(trace.toString().trim());
+                    details.setTrace(mergeStatusTrace(details, exception));
                     update.setStatusDetails(details);
                 });
-                throw new RuntimeException(FailureReporter.getRootCause(exception).trim(), exception);
+                throw new RuntimeException(createFailureMessageWithCausedBy(exception), exception);
             }
         }
+    }
+
+    static NoSuchElementException createDragAndDropDestinationNotFoundException(By destinationLocator, NoSuchElementException rootCauseException) {
+        return new NoSuchElementException("Failed to perform drag and drop because the destination element could not be located using "
+                + JavaHelper.formatLocatorToString(destinationLocator) + ".", rootCauseException);
+    }
+
+    static WebElement chooseDragAndDropElement(List<WebElement> elements, By locator, String role) {
+        if (elements == null || elements.isEmpty()) {
+            throw createDragAndDropElementNotFoundException(locator, role,
+                    new NoSuchElementException("No " + role + " element was found."));
+        }
+
+        for (WebElement element : elements) {
+            try {
+                if (element.isDisplayed()) {
+                    return element;
+                }
+            } catch (WebDriverException ignored) {
+                // try next match
+            }
+        }
+        throw createDragAndDropElementNotFoundException(locator, role,
+                new NoSuchElementException("Found " + elements.size() + " " + role + " element(s), but none are displayed."));
+    }
+
+    /**
+     * Selects the first displayed element from the provided list.
+     *
+     * <p>If no displayed elements are found, this method falls back to returning the first
+     * element in the list to preserve current action behavior.
+     *
+     * @param elements candidate elements matched by the target locator
+     * @return the first displayed element, or the first element in the list if none are displayed
+     * @throws NoSuchElementException if the list is null or empty
+     */
+    static WebElement chooseBestEffortDisplayedElement(List<WebElement> elements) {
+        if (elements == null || elements.isEmpty()) {
+            throw new NoSuchElementException("No elements were found.");
+        }
+        for (WebElement element : elements) {
+            try {
+                if (element.isDisplayed()) {
+                    return element;
+                }
+            } catch (WebDriverException ignored) {
+                // try next match
+            }
+        }
+        return elements.getFirst();
+    }
+
+    static boolean hasDisplayedElement(List<WebElement> elements) {
+        if (elements == null || elements.isEmpty()) {
+            return false;
+        }
+        for (WebElement element : elements) {
+            try {
+                if (element.isDisplayed()) {
+                    return true;
+                }
+            } catch (WebDriverException ignored) {
+                // try next match
+            }
+        }
+        return false;
+    }
+
+    private static NoSuchElementException createDragAndDropElementNotFoundException(By locator, String role, NoSuchElementException rootCauseException) {
+        return new NoSuchElementException("Failed to perform drag and drop because the " + role + " element could not be located using "
+                + JavaHelper.formatLocatorToString(locator) + ".", rootCauseException);
+    }
+
+    static Sequence buildTouchDragAndDropSequence(Rectangle sourceElementRectangle, Rectangle destinationElementRectangle) {
+        PointerInput finger = new PointerInput(PointerInput.Kind.TOUCH, "finger");
+        Sequence dragAndDrop = new Sequence(finger, 0);
+        PointerInput.Origin VIEW = PointerInput.Origin.viewport();
+        dragAndDrop.addAction(finger.createPointerMove(Duration.ZERO, VIEW,
+                sourceElementRectangle.getX() + sourceElementRectangle.getWidth() / 2,
+                sourceElementRectangle.getY() + sourceElementRectangle.getHeight() / 2));
+        dragAndDrop.addAction(finger.createPointerDown(PointerInput.MouseButton.LEFT.asArg()));
+        dragAndDrop.addAction(new Pause(finger, defaultPauseDuration));
+        dragAndDrop.addAction(finger.createPointerMove(defaultPauseDuration, VIEW,
+                destinationElementRectangle.getX() + destinationElementRectangle.getWidth() / 2,
+                destinationElementRectangle.getY() + destinationElementRectangle.getHeight() / 2));
+        dragAndDrop.addAction(finger.createPointerUp(PointerInput.MouseButton.LEFT.asArg()));
+        return dragAndDrop;
+    }
+
+    private static void executeMobileDragAndDrop(AppiumDriver appiumDriver, WebElement sourceElement, WebElement destinationElement) {
+        try {
+            if (sourceElement instanceof org.openqa.selenium.remote.RemoteWebElement remoteSourceElement) {
+                appiumDriver.executeScript("mobile: dragGesture",
+                        createDragGestureParameters(remoteSourceElement.getId(), destinationElement.getRect()));
+                return;
+            }
+        } catch (WebDriverException ignored) {
+            // fallback to W3C actions sequence
+        }
+        appiumDriver.perform(List.of(buildTouchDragAndDropSequence(sourceElement.getRect(), destinationElement.getRect())));
+    }
+
+    static Map<String, Object> createDragGestureParameters(String sourceElementId, Rectangle destinationElementRectangle) {
+        return Map.of(
+                "elementId", sourceElementId,
+                "endX", destinationElementRectangle.getX() + destinationElementRectangle.getWidth() / 2,
+                "endY", destinationElementRectangle.getY() + destinationElementRectangle.getHeight() / 2
+        );
+    }
+
+    /**
+     * Logs a granular drag-and-drop trace entry to help identify the exact failing substep.
+     *
+     * @param details structured trace details for the current drag-and-drop substep
+     */
+    private static void logDragAndDropTrace(String details) {
+        ReportManager.logDiscrete("[DRAG_AND_DROP_TRACE] " + details);
+    }
+
+    static String mergeStatusTrace(StatusDetails details, RuntimeException exception) {
+        String formattedExceptionTrace = ReportManagerHelper.formatStackTraceToLogEntry(exception).trim();
+        String existingTrace = details.getTrace();
+        if (existingTrace == null || existingTrace.isBlank()) {
+            return formattedExceptionTrace;
+        }
+        return (existingTrace + System.lineSeparator() + formattedExceptionTrace).trim();
+    }
+
+    static String createFailureMessageWithCausedBy(RuntimeException exception) {
+        String rootCause = FailureReporter.getRootCause(exception).trim();
+        Throwable cause = exception.getCause();
+        if (cause == null) {
+            return rootCause;
+        }
+        String causeMessage = cause.getMessage() == null ? "" : cause.getMessage().trim();
+        String causedBySection = "Caused by: " + cause.getClass().getName() + (causeMessage.isEmpty() ? "" : ": " + causeMessage);
+        return (rootCause + System.lineSeparator() + causedBySection).trim();
     }
 
     protected enum ActionType {HOVER, CLICK, JAVASCRIPT_CLICK, TYPE, TYPE_SECURELY, TYPE_APPEND, JAVASCRIPT_SET_VALUE, CLEAR, DRAG_AND_DROP, GET_ATTRIBUTE, GET_DOM_ATTRIBUTE, GET_DOM_PROPERTY, GET_NAME, GET_TEXT, GET_CSS_VALUE, GET_IS_DISPLAYED, GET_IS_ENABLED, DRAG_AND_DROP_BY_OFFSET, GET_SELECTED_TEXT, CLICK_AND_HOLD, DOUBLE_CLICK, GET_IS_SELECTED, CLIPBOARD_DELETE, CLIPBOARD_COPY, CLIPBOARD_CUT, CLIPBOARD_PASTE, DROP_FILE_TO_UPLOAD}

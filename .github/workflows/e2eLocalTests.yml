@@ -7,15 +7,41 @@ on:
 
 env:
   GLOBAL_TESTING_SCOPE: "!%regex[.*DatabaseActions.*], !%regex[.*CLI.*], !%regex[.*DB.*], !%regex[.*Db.*], !%regex[.*db.*], !%regex[.*API.*], !%regex[.*Api.*], !%regex[.*api.*], !%regex[.*uestBuilder.*], !%regex[.*Rest.*], !%regex[.*Json.*], !%regex[.*JSON.*], !%regex[.*json.*], !%regex[.*ndroid.*], !%regex[.*IOS.*], !%regex[.*MobileWeb.*], !%regex[.*appium.Mobile.*], !%regex[.*properties.Mobile.*], !%regex[.*CucumberTests.*], !%regex[.*LT.*], !%regex[.*Flutter.*]"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  Workflow_Summary:
+    if: always()
+    needs: [Windows_Edge_Local, MacOSX_Safari_Local, Windows_Chrome_Local, MacOSX_Chrome_Local, Windows_Edge_Cucumber_Local]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+      - name: Consolidate Test Results
+        uses: ./.github/actions/consolidate-test-results
+        with:
+          needs-json: ${{ toJSON(needs) }}
+
   Windows_Edge_Local:
     runs-on: windows-latest
+    outputs:
+      job: ${{ steps.post_test_report.outputs.job }}
+      total: ${{ steps.post_test_report.outputs.total }}
+      passed: ${{ steps.post_test_report.outputs.passed }}
+      failed: ${{ steps.post_test_report.outputs.failed }}
+      broken: ${{ steps.post_test_report.outputs.broken }}
+      skipped: ${{ steps.post_test_report.outputs.skipped }}
+      duration: ${{ steps.post_test_report.outputs.duration }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v6
       - name: Setup Test Environment
         uses: ./.github/actions/setup-test-env
+        with:
+          node-version: '20'
       - name: Print Edge version
         continue-on-error: true
         run: (Get-Item (Get-Command msedge).Source).VersionInfo.ProductVersion
@@ -23,6 +49,7 @@ jobs:
         continue-on-error: true
         run: mvn -e test "-DdefaultElementIdentificationTimeout=5" "-DsetParallelMode=NONE" "-DretryMaximumNumberOfAttempts=1" "-DexecutionAddress=local" "-DtargetOperatingSystem=WINDOWS" "-DtargetBrowserName=MicrosoftEdge" "-DheadlessExecution=true" "-DgenerateAllureReportArchive=true" "-Dtest=${{ env.GLOBAL_TESTING_SCOPE }}"
       - name: Post-Test Report and Check
+        id: post_test_report
         if: always()
         uses: ./.github/actions/post-test-report
         with:
@@ -31,15 +58,26 @@ jobs:
 
   MacOSX_Safari_Local:
     runs-on: macos-latest
+    outputs:
+      job: ${{ steps.post_test_report.outputs.job }}
+      total: ${{ steps.post_test_report.outputs.total }}
+      passed: ${{ steps.post_test_report.outputs.passed }}
+      failed: ${{ steps.post_test_report.outputs.failed }}
+      broken: ${{ steps.post_test_report.outputs.broken }}
+      skipped: ${{ steps.post_test_report.outputs.skipped }}
+      duration: ${{ steps.post_test_report.outputs.duration }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v6
       - name: Setup Test Environment
         uses: ./.github/actions/setup-test-env
+        with:
+          node-version: '20'
       - name: Run tests
         continue-on-error: true
         run: mvn -e test "-DdefaultElementIdentificationTimeout=5" "-DretryMaximumNumberOfAttempts=1" "-DexecutionAddress=local" "-DtargetOperatingSystem=MAC" "-DtargetBrowserName=safari" "-DgenerateAllureReportArchive=true" "-Dtest=${{ env.GLOBAL_TESTING_SCOPE }}, !%regex[.*MobileEmulation.*]"
       - name: Post-Test Report and Check
+        id: post_test_report
         if: always()
         uses: ./.github/actions/post-test-report
         with:
@@ -48,15 +86,26 @@ jobs:
 
   Windows_Chrome_Local:
     runs-on: windows-latest
+    outputs:
+      job: ${{ steps.post_test_report.outputs.job }}
+      total: ${{ steps.post_test_report.outputs.total }}
+      passed: ${{ steps.post_test_report.outputs.passed }}
+      failed: ${{ steps.post_test_report.outputs.failed }}
+      broken: ${{ steps.post_test_report.outputs.broken }}
+      skipped: ${{ steps.post_test_report.outputs.skipped }}
+      duration: ${{ steps.post_test_report.outputs.duration }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v6
       - name: Setup Test Environment
         uses: ./.github/actions/setup-test-env
+        with:
+          node-version: '20'
       - name: Run tests
         continue-on-error: true
         run: mvn -e test "-DdefaultElementIdentificationTimeout=5" "-DsetParallelMode=NONE" "-DretryMaximumNumberOfAttempts=1" "-DexecutionAddress=local" "-DtargetOperatingSystem=WINDOWS" "-DtargetBrowserName=chrome" "-DheadlessExecution=true" "-DgenerateAllureReportArchive=true" "-Dtest=${{ env.GLOBAL_TESTING_SCOPE }}"
       - name: Post-Test Report and Check
+        id: post_test_report
         if: always()
         uses: ./.github/actions/post-test-report
         with:
@@ -65,15 +114,26 @@ jobs:
 
   MacOSX_Chrome_Local:
     runs-on: macos-latest
+    outputs:
+      job: ${{ steps.post_test_report.outputs.job }}
+      total: ${{ steps.post_test_report.outputs.total }}
+      passed: ${{ steps.post_test_report.outputs.passed }}
+      failed: ${{ steps.post_test_report.outputs.failed }}
+      broken: ${{ steps.post_test_report.outputs.broken }}
+      skipped: ${{ steps.post_test_report.outputs.skipped }}
+      duration: ${{ steps.post_test_report.outputs.duration }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v6
       - name: Setup Test Environment
         uses: ./.github/actions/setup-test-env
+        with:
+          node-version: '20'
       - name: Run tests
         continue-on-error: true
         run: mvn -e test "-DdefaultElementIdentificationTimeout=5" "-DsetParallelMode=NONE" "-DretryMaximumNumberOfAttempts=1" "-DexecutionAddress=local" "-DtargetOperatingSystem=MAC" "-DtargetBrowserName=chrome" "-DheadlessExecution=true" "-DgenerateAllureReportArchive=true" "-Dtest=${{ env.GLOBAL_TESTING_SCOPE }}"
       - name: Post-Test Report and Check
+        id: post_test_report
         if: always()
         uses: ./.github/actions/post-test-report
         with:
@@ -82,6 +142,14 @@ jobs:
 
   Windows_Edge_Cucumber_Local:
     runs-on: windows-latest
+    outputs:
+      job: ${{ steps.post_test_report.outputs.job }}
+      total: ${{ steps.post_test_report.outputs.total }}
+      passed: ${{ steps.post_test_report.outputs.passed }}
+      failed: ${{ steps.post_test_report.outputs.failed }}
+      broken: ${{ steps.post_test_report.outputs.broken }}
+      skipped: ${{ steps.post_test_report.outputs.skipped }}
+      duration: ${{ steps.post_test_report.outputs.duration }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v6
@@ -96,21 +164,9 @@ jobs:
         continue-on-error: true
         run: mvn -e test "-DdefaultElementIdentificationTimeout=5" "-DsetParallelMode=NONE" "-DretryMaximumNumberOfAttempts=1" "-DexecutionAddress=local" "-DtargetOperatingSystem=WINDOWS" "-DmaximumPerformanceMode=2" "-DtargetBrowserName=MicrosoftEdge" "-DgenerateAllureReportArchive=true" "-Dtest=%regex[.*CucumberTests.*]"
       - name: Post-Test Report and Check
+        id: post_test_report
         if: always()
         uses: ./.github/actions/post-test-report
         with:
           job-name: Windows_Edge_Cucumber_Local
           codecov-token: ${{ secrets.CODECOV_TOKEN }}
-
-  Workflow_Summary:
-    if: always()
-    needs: [Windows_Edge_Local, MacOSX_Safari_Local, Windows_Chrome_Local, MacOSX_Chrome_Local, Windows_Edge_Cucumber_Local]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v6
-      - name: Consolidate Test Results
-        uses: ./.github/actions/consolidate-test-results
